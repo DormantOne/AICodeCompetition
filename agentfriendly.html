@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Python Playground (Pyodide)</title>
+
+  <style>
+    :root { --fontSize: 14px; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; line-height: 1.35; }
+    main { max-width: 1000px; margin: 0 auto; }
+
+    .skip-link {
+      position: absolute; left: -999px; top: 8px;
+      background: #fff; border: 1px solid #000; padding: 8px 10px; border-radius: 8px;
+    }
+    .skip-link:focus { left: 8px; z-index: 9999; }
+
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .help { opacity: 0.85; font-size: 0.95rem; }
+    textarea {
+      width: 100%;
+      height: 260px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: var(--fontSize);
+      padding: 10px;
+      border-radius: 10px;
+      border: 1px solid #ccc;
+    }
+    pre {
+      width: 100%;
+      min-height: 180px;
+      padding: 12px;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      overflow: auto;
+      font-size: var(--fontSize);
+    }
+    button {
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid #ccc;
+      background: #fff;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    /* Strong visible focus for keyboard users */
+    :focus-visible { outline: 3px solid #000; outline-offset: 2px; }
+
+    /* High-contrast mode */
+    body.hc { background: #000; color: #fff; }
+    body.hc textarea, body.hc pre { background: #000; color: #fff; border-color: #fff; }
+    body.hc button { background: #000; color: #fff; border-color: #fff; }
+    body.hc .help { opacity: 0.95; }
+
+    /* Screen-reader-only utility */
+    .sr-only {
+      position: absolute !important;
+      width: 1px !important; height: 1px !important;
+      padding: 0 !important; margin: -1px !important;
+      overflow: hidden !important;
+      clip: rect(0, 0, 0, 0) !important;
+      white-space: nowrap !important; border: 0 !important;
+    }
+  </style>
+
+  <!-- Pyodide CDN -->
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.29.3/full/pyodide.js"></script>
+</head>
+
+<body>
+  <a class="skip-link" href="#code">Skip to code editor</a>
+
+  <main>
+    <h1>Python Playground</h1>
+
+    <p class="help" id="shortcuts">
+      Keyboard shortcuts:
+      <strong>Ctrl+I</strong> init,
+      <strong>Ctrl+Enter</strong> run,
+      <strong>Ctrl+L</strong> clear output,
+      <strong>Ctrl+K</strong> copy share link.
+    </p>
+
+    <div class="row" role="group" aria-label="Playground controls">
+      <button id="btnInit" aria-describedby="shortcuts">Initialize Python</button>
+      <button id="btnRun" aria-describedby="shortcuts" disabled>Run</button>
+      <button id="btnClear" aria-describedby="shortcuts">Clear output</button>
+      <button id="btnShare" aria-describedby="shortcuts">Copy share link</button>
+      <button id="btnA11y">Toggle high contrast</button>
+
+      <label for="fontSel">Font size</label>
+      <select id="fontSel" aria-label="Font size">
+        <option value="14">14</option>
+        <option value="16">16</option>
+        <option value="18">18</option>
+        <option value="20">20</option>
+        <option value="24">24</option>
+      </select>
+    </div>
+
+    <!-- Status is announced politely to assistive tech -->
+    <p id="status" role="status" aria-live="polite">Not initialized</p>
+
+    <!-- Errors announced assertively -->
+    <div id="alert" class="sr-only" role="alert" aria-live="assertive"></div>
+
+    <h2>Code</h2>
+    <label for="code" class="sr-only">Python code editor</label>
+    <textarea id="code">print("hello from python")
+
+total = sum(i*i for i in range(10))
+print("sum of squares 0..9 =", total)
+</textarea>
+
+    <h2>Output</h2>
+    <p class="help">Tip: output updates are announced via status; the full log is below.</p>
+    <pre id="out" aria-label="Program output" tabindex="0"></pre>
+  </main>
+
+<script>
+(() => {
+  const outEl = document.getElementById("out");
+  const statusEl = document.getElementById("status");
+  const alertEl = document.getElementById("alert");
+
+  const btnInit = document.getElementById("btnInit");
+  const btnRun = document.getElementById("btnRun");
+  const btnClear = document.getElementById("btnClear");
+  const btnShare = document.getElementById("btnShare");
+  const btnA11y = document.getElementById("btnA11y");
+
+  const fontSel = document.getElementById("fontSel");
+  const codeEl = document.getElementById("code");
+
+  const logLine = (txt) => { outEl.textContent += txt + "\n"; };
+  const setStatus = (txt) => { statusEl.textContent = txt; };
+  const announceError = (txt) => { alertEl.textContent = txt; };
+
+  let pyodide = null;
+
+  // ---- Base64URL helpers (UTF-8 safe) ----
+  function bytesToBase64(bytes) {
+    let bin = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    return btoa(bin);
+  }
+
+  function base64ToBytes(b64) {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+
+  function toBase64Url(str) {
+    const bytes = new TextEncoder().encode(str);
+    const b64 = bytesToBase64(bytes);
+    return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  }
+
+  function fromBase64Url(b64url) {
+    let b64 = b64url.replace(/-/g, "+").replace(/_/g, "/");
+    const pad = b64.length % 4;
+    if (pad) b64 += "=".repeat(4 - pad);
+    const bytes = base64ToBytes(b64);
+    return new TextDecoder().decode(bytes);
+  }
+
+  // ---- URL payload parsing (deep links) ----
+  function applyUrlPayload() {
+    const params = new URLSearchParams(window.location.search);
+
+    const codeParam = params.get("code");
+    if (codeParam) {
+      try {
+        codeEl.value = fromBase64Url(codeParam);
+        setStatus("Loaded code from URL");
+      } catch (e) {
+        announceError("Could not decode code payload from URL.");
+      }
+    }
+
+    const theme = params.get("theme");
+    if (theme === "hc") document.body.classList.add("hc");
+
+    const font = parseInt(params.get("font") || "", 10);
+    if (Number.isFinite(font) && font >= 12 && font <= 40) {
+      document.documentElement.style.setProperty("--fontSize", font + "px");
+      fontSel.value = String(font);
+    }
+
+    const focus = params.get("focus");
+    if (focus === "run") btnRun.focus();
+    else if (focus === "out") outEl.focus();
+    else codeEl.focus();
+
+    const autoinit = params.get("autoinit") === "1";
+    const autorun = params.get("autorun") === "1";
+
+    if (autoinit) {
+      initPyodide().then(() => {
+        if (autorun) runCode();
+      });
+    }
+  }
+
+  // ---- UI actions ----
+  async function initPyodide() {
+    if (pyodide) return;
+    btnInit.disabled = true;
+    setStatus("Loading Python (Pyodide) ...");
+
+    try {
+      pyodide = await loadPyodide({
+        indexURL: "https://cdn.jsdelivr.net/pyodide/v0.29.3/full/",
+        stdout: (s) => logLine(s),
+        stderr: (s) => logLine(s),
+      });
+
+      setStatus("Ready");
+      btnRun.disabled = false;
+      logLine("✅ Pyodide initialized.");
+      const ver = pyodide.runPython("import sys; sys.version");
+      logLine("Python: " + ver);
+    } catch (e) {
+      setStatus("Init failed");
+      btnInit.disabled = false;
+      announceError("Initialization failed.");
+      logLine("❌ Init error: " + (e?.message || String(e)));
+    }
+  }
+
+  async function runCode() {
+    if (!pyodide) {
+      announceError("Initialize first.");
+      return;
+    }
+    btnRun.disabled = true;
+    setStatus("Running ...");
+
+    try {
+      const code = codeEl.value;
+      await pyodide.loadPackagesFromImports(code);
+      await pyodide.runPythonAsync(code);
+      setStatus("Ready (ran code)");
+    } catch (e) {
+      setStatus("Ready (with error)");
+      announceError("Runtime error.");
+      logLine("❌ Runtime error: " + (e?.message || String(e)));
+    } finally {
+      btnRun.disabled = false;
+    }
+  }
+
+  function clearOutput() {
+    outEl.textContent = "";
+    setStatus("Cleared output");
+  }
+
+  async function copyShareLink() {
+    // NOTE: We do NOT auto-execute by default in the generated link.
+    // If you want fully hands-free autorun, manually add &autoinit=1&autorun=1.
+    const url = new URL(window.location.href);
+    url.searchParams.set("code", toBase64Url(codeEl.value));
+
+    // carry a11y prefs
+    if (document.body.classList.contains("hc")) url.searchParams.set("theme", "hc");
+    url.searchParams.set("font", fontSel.value);
+    url.searchParams.set("focus", "code");
+    url.searchParams.delete("autoinit");
+    url.searchParams.delete("autorun");
+
+    const text = url.toString();
+    try {
+      await navigator.clipboard.writeText(text);
+      setStatus("Copied share link to clipboard");
+    } catch {
+      // fallback: select-in-place in output
+      logLine("Share link (copy manually):");
+      logLine(text);
+      setStatus("Share link shown in output");
+    }
+  }
+
+  // ---- Event wiring ----
+  btnInit.addEventListener("click", initPyodide);
+  btnRun.addEventListener("click", runCode);
+  btnClear.addEventListener("click", clearOutput);
+  btnShare.addEventListener("click", copyShareLink);
+
+  btnA11y.addEventListener("click", () => {
+    document.body.classList.toggle("hc");
+    setStatus(document.body.classList.contains("hc") ? "High contrast on" : "High contrast off");
+  });
+
+  fontSel.addEventListener("change", () => {
+    const v = parseInt(fontSel.value, 10);
+    document.documentElement.style.setProperty("--fontSize", v + "px");
+    setStatus("Font size set to " + v);
+  });
+
+  // Keyboard shortcuts (hands-free friendly)
+  document.addEventListener("keydown", (e) => {
+    const ctrl = e.ctrlKey || e.metaKey; // support Cmd on Mac
+    if (!ctrl) return;
+
+    if (e.key === "Enter") { e.preventDefault(); runCode(); }
+    if (e.key.toLowerCase() === "i") { e.preventDefault(); initPyodide(); }
+    if (e.key.toLowerCase() === "l") { e.preventDefault(); clearOutput(); }
+    if (e.key.toLowerCase() === "k") { e.preventDefault(); copyShareLink(); }
+  });
+
+  // Apply URL payload on load
+  applyUrlPayload();
+})();
+</script>
+</body>
+</html>
