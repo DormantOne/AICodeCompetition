@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Python Playground (Pyodide)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    textarea { width: 100%; height: 260px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; }
+    pre { width: 100%; min-height: 180px; padding: 12px; border: 1px solid #ddd; border-radius: 8px; overflow: auto; }
+    button { padding: 10px 12px; border-radius: 10px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .status { opacity: 0.8; }
+  </style>
+
+  <!-- Pyodide official CDN URL (stable release) -->
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.29.3/full/pyodide.js"></script>
+  <!-- Pyodide docs recommend this CDN form for a pinned version -->
+  <!-- https://cdn.jsdelivr.net/pyodide/v0.29.3/full/pyodide.js -->
+</head>
+<body>
+  <h1>Python Playground</h1>
+
+  <div class="row">
+    <button id="btnInit">Initialize Python</button>
+    <button id="btnRun" disabled>Run</button>
+    <button id="btnClear">Clear output</button>
+    <span class="status" id="status">Not initialized</span>
+  </div>
+
+  <h3>Code</h3>
+  <textarea id="code">print("hello from python")
+
+# Try something a bit bigger:
+total = sum(i*i for i in range(10))
+print("sum of squares 0..9 =", total)
+</textarea>
+
+  <h3>Output</h3>
+  <pre id="out"></pre>
+
+<script>
+(() => {
+  const outEl = document.getElementById("out");
+  const statusEl = document.getElementById("status");
+  const btnInit = document.getElementById("btnInit");
+  const btnRun = document.getElementById("btnRun");
+  const btnClear = document.getElementById("btnClear");
+  const codeEl = document.getElementById("code");
+
+  const log = (txt) => { outEl.textContent += txt; };
+  const logLine = (txt) => { outEl.textContent += txt + "\n"; };
+  const setStatus = (txt) => { statusEl.textContent = txt; };
+
+  let pyodide = null;
+
+  btnClear.addEventListener("click", () => { outEl.textContent = ""; });
+
+  btnInit.addEventListener("click", async () => {
+    if (pyodide) return;
+    btnInit.disabled = true;
+    setStatus("Loading Python (Pyodide) ...");
+
+    try {
+      // loadPyodide() returns a `pyodide` object (official API)
+      // and supports stdout/stderr handlers
+      pyodide = await loadPyodide({
+        indexURL: "https://cdn.jsdelivr.net/pyodide/v0.29.3/full/",
+        stdout: (s) => logLine(s),
+        stderr: (s) => logLine(s),
+      });
+
+      setStatus("Ready");
+      btnRun.disabled = false;
+      logLine("✅ Pyodide initialized.");
+      // Show Python version quickly:
+      const ver = pyodide.runPython("import sys; sys.version");
+      logLine("Python: " + ver);
+    } catch (e) {
+      setStatus("Init failed");
+      btnInit.disabled = false;
+      logLine("❌ Init error: " + (e?.message || String(e)));
+    }
+  });
+
+  btnRun.addEventListener("click", async () => {
+    if (!pyodide) {
+      logLine("Initialize first.");
+      return;
+    }
+    btnRun.disabled = true;
+    setStatus("Running ...");
+
+    try {
+      const code = codeEl.value;
+
+      // If user imports packages that are included with Pyodide,
+      // this will auto-fetch them (REPL-style).
+      // Note: this only loads packages bundled with Pyodide.
+      await pyodide.loadPackagesFromImports(code);
+
+      // Run the code asynchronously (so the UI stays responsive)
+      await pyodide.runPythonAsync(code);
+      setStatus("Ready");
+    } catch (e) {
+      setStatus("Ready (with error)");
+      logLine("❌ Runtime error: " + (e?.message || String(e)));
+    } finally {
+      btnRun.disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>
