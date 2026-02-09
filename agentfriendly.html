@@ -171,9 +171,17 @@ print("sum of squares 0..9 =", total)
     return new TextDecoder().decode(bytes);
   }
 
-  // ---- URL payload parsing (deep links) ----
   function applyUrlPayload() {
-    const params = new URLSearchParams(window.location.search);
+  // Merge ?query params + #hash params
+  // Hash params win if both exist (lets you keep normal query for other stuff).
+  const params = (() => {
+    const q = new URLSearchParams(window.location.search);
+    const h = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
+    for (const [k, v] of h.entries()) q.set(k, v);
+    return q;
+  })();
+
+
 
     const codeParam = params.get("code");
     if (codeParam) {
